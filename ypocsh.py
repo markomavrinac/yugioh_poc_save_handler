@@ -6,6 +6,14 @@ import os
 import msvcrt
 import logging
 from tkinter import filedialog
+import sys
+import ctypes
+
+def is_admin():
+    try:
+        return ctypes.windll.shell32.IsUserAnAdmin()
+    except:
+        return False
 
 class DataContainer():
     def __init__(self):
@@ -185,7 +193,6 @@ def load_backup(slot_number):
     location = handle_location(reg_folder[0])
     path_list = reg_folder[1].split("/")
     backslash = r'\\'
-    path_list.append("system")
     path = backslash.join(path_list)
     info("Attempting to copy system.dat to common folder...")
     try:
@@ -195,12 +202,13 @@ def load_backup(slot_number):
         error(f"Could not copy system.dat to common folder: {traceback.format_exc()}")
     info("Attempting to modify registry entry...")
     try:
-        key_folder = wrg.OpenKeyEx(handle_location(container.get_registry()[0]), (container.get_registry()[1]+"/"+container.get_registry()[2]).replace("/", backslash), 0, wrg.KEY_SET_VALUE)
+        key_folder = wrg.OpenKeyEx(handle_location(container.get_registry()[0]), fr'{container.get_registry()[1].replace("/", backslash)}', 0, wrg.KEY_SET_VALUE)
         wrg.SetValueEx(key_folder, "flcrc", 0, wrg.REG_BINARY, flcrc)
         info("SUCCESS!")
         key_folder.Close()
     except:
         error(f"Could not modify registry entry: {traceback.format_exc()}")
+        return
     info("Backup successfully loaded!")
     print("Going back to main menu...")
     main_menu()
@@ -249,12 +257,14 @@ def checkForFlcrc(location, path):
             return False
 def searchUntilSystem(location, path): #search registry tree until system folder is found
     backslash = r"\\"
-    
     key_path = backslash.join(path)+backslash
     try:
         key = wrg.OpenKey(location, key_path, 0, wrg.KEY_READ | wrg.KEY_WOW64_64KEY)
     except FileNotFoundError:
-        key = wrg.OpenKey(location, key_path, 0, wrg.KEY_READ | wrg.KEY_WOW64_32KEY)
+        try:
+            key = wrg.OpenKey(location, key_path, 0, wrg.KEY_READ | wrg.KEY_WOW64_32KEY)
+        except FileNotFoundError:
+            return False
     except PermissionError:
         return False
     sub_keys = []
@@ -262,20 +272,26 @@ def searchUntilSystem(location, path): #search registry tree until system folder
     while True:
         try:
             subkey = wrg.EnumKey(key, counter)
-            if subkey == 'system':
-                path.append("system")
-                if checkForFlcrc(location, path):
-                    info(f"FOUND SYSTEM: {key_path+'system'}")
-                    return key_path+backslash+'system'
-            else:
-                path.append(subkey)
-                return searchUntilSystem(location, path)
+        except FileNotFoundError:
             counter += 1
         except OSError:
             #print(traceback.format_exc())
             return False
-        except FileNotFoundError:
+        try:
+            if subkey == 'system':
+                path.append("system")
+                if checkForFlcrc(location, path):
+                    info(f"FOUND SYSTEM: {key_path+'system'}")
+                    return fr"{key_path}"
+            else:
+                new_path = path + [subkey]
+                path_candidate = searchUntilSystem(location, new_path)
+                if path_candidate:
+                    return path_candidate
+                    
             counter += 1
+        
+        
         except:
             counter+=1   
 def searchRegistryFolder():
@@ -283,18 +299,16 @@ def searchRegistryFolder():
     locations = ["local_machine", "current_user", "classes_root"]
     for location in locations:
         info(f"Scanning location: {location}")
-        location = handle_location(location)
-        key = wrg.OpenKey(location, "", 0, wrg.KEY_READ | wrg.KEY_WOW64_64KEY)
+        location_code = handle_location(location)
+        key = wrg.OpenKey(location_code, "", 0, wrg.KEY_READ | wrg.KEY_WOW64_64KEY)
         
         counter = 0
         while True:
             try:
                 #print(wrg.EnumKey(key, counter))
-                path = searchUntilSystem(location, [wrg.EnumKey(key, counter)])
+                path = searchUntilSystem(location_code, [wrg.EnumKey(key, counter)])
                 if path:
-                    path = path.split(backslash)
-                    path.remove("")
-                    return path
+                    return [location, fr"{path}system", "system"]
                 counter += 1
             except:
                 break
@@ -303,7 +317,10 @@ def lookForFolder(location, path, folder_name):
     location = handle_location(location)
     path_list = path.split("/")
     backlash_char = r"\\"
-    key = wrg.OpenKey(location, fr"{backlash_char.join(path_list)}", 0, wrg.KEY_READ | wrg.KEY_WOW64_64KEY)
+    try:
+        key = wrg.OpenKey(location, fr"{backlash_char.join(path_list)}", 0, wrg.KEY_READ | wrg.KEY_WOW64_64KEY)
+    except:
+        return False
     counter = 0
     while True:
         try:
@@ -354,9 +371,11 @@ def getSubKeys(folder):
     return_dict = {"flcrc": None, "common_path": None}
     location = handle_location(folder[0])
     path_list = folder[1].split("/")
-    path_list.append(folder[2])
-    backlash_char = r"\\"    
-    key = wrg.OpenKey(location, fr"{backlash_char.join(path_list)}", 0, wrg.KEY_READ | wrg.KEY_WOW64_64KEY)
+    backlash_char = r"\\"
+    try:
+        key = wrg.OpenKey(location, fr"{backlash_char.join(path_list)}", 0, wrg.KEY_READ | wrg.KEY_WOW64_64KEY)
+    except FileNotFoundError:
+        key = wrg.OpenKey(location, fr"{backlash_char.join(path_list)}", 0, wrg.KEY_READ | wrg.KEY_WOW64_32KEY)
     counter = 0
     while True:
         try:
@@ -371,10 +390,7 @@ def getSubKeys(folder):
         except:
             return return_dict
 def main(folder=False):
-    searchRegistryFolder()
     backslash = r"\\"
-    if not folder:
-        folder = findRegistryFolder()
     if folder:
         debug(f"Found registry key - {folder}")
         container.set_registry(folder)
@@ -412,31 +428,19 @@ def main(folder=False):
         container.set_flcrc(sub_keys["flcrc"])
         main_menu()
     else:
-        error("Cannot find required registry key.\nIf you want, I can attempt to search registry for the key.\n1) Look for registry key\n2) Exit program")
-        response = msvcrt.getch().decode("ascii")
-        if response == "\x03" or response == "\x1b":
-            print("Exiting...")
-            return
+        info("Searching through registry for required key...")
+        
+        folder = searchRegistryFolder()
+        if folder:
+            main(folder)
         else:
-            try:
-                response = int(response)
-            except:
-                pass #in case the response is invalid just ignore
-        while response not in [1,2]:
-            response = msvcrt.getch().decode("ascii")
-            if response == "\x03" or response == "\x1b":
-                print("Exiting...")
-                return
-            else:
-                try:
-                    response = int(response)
-                except:
-                    pass #in case the response is invalid just ignore
-        if response == 1:
-            folder = searchRegistryFolder()
-            if folder:
-                main(folder)
-        elif response == 2:
-            return
+            error("Failed to find registry folder. Exiting.")
 
-main()
+
+
+
+if is_admin():
+    main()
+else:
+    # Re-run the program with admin rights
+    ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, " ".join(sys.argv[1:]), None, 1)
