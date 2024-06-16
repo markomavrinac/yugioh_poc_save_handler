@@ -1,7 +1,8 @@
 # yugioh_poc_save_handler
 Yu-Gi-Oh! Power of Chaos save handler - A script to manage your save games across multiple computers
 
-![YPOCSH](imgur.com/BX8htVs)
+![image](https://github.com/markomavrinac/yugioh_poc_save_handler/assets/12936791/fd71b135-362c-4e0f-bede-ce8b5c54d785)
+
 
 At startup, the script scans your registry for key related to game save files.
 The script also attempts to locate your common folder according to the registry entry, if it fails, user will be prompted to browse for common folder.
